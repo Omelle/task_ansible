@@ -1,0 +1,138 @@
+---
+- name: Installer SonarQube Server sur Ubuntu
+  hosts: cicdhub
+  become: yes
+
+  vars:
+    sonarqube_version: "10.4.1.88267"
+    sonarqube_user: "sonarqube"
+    sonarqube_group: "sonarqube"
+    sonarqube_install_dir: "/opt/sonarqube"
+    sonarqube_service_name: "sonarqube"
+    sonarqube_port: 9000
+    sonarqube_download_url: "https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-{{ sonarqube_version }}.zip"
+
+  tasks:
+
+    - name: Installer dépendances
+      apt:
+        name:
+          - unzip
+          - openjdk-17-jdk
+          - postgresql
+          - postgresql-contrib
+        state: present
+        update_cache: yes
+
+    - name: Créer un utilisateur système SonarQube
+      user:
+        name: "{{ sonarqube_user }}"
+        shell: /bin/bash
+        system: yes
+        create_home: yes
+
+    - name: Créer répertoire d'installation SonarQube
+      file:
+        path: "{{ sonarqube_install_dir }}"
+        state: directory
+        owner: "{{ sonarqube_user }}"
+        group: "{{ sonarqube_group }}"
+        mode: '0755'
+
+    - name: Télécharger SonarQube
+      get_url:
+        url: "{{ sonarqube_download_url }}"
+        dest: "/tmp/sonarqube.zip"
+        mode: '0644'
+
+    - name: Extraire SonarQube
+      unarchive:
+        src: "/tmp/sonarqube.zip"
+        dest: "{{ sonarqube_install_dir }}"
+        remote_src: yes
+        creates: "{{ sonarqube_install_dir }}/sonarqube-{{ sonarqube_version }}"
+
+    - name: Créer un lien symbolique vers l'installation
+      file:
+        src: "{{ sonarqube_install_dir }}/sonarqube-{{ sonarqube_version }}"
+        dest: "{{ sonarqube_install_dir }}/current"
+        state: link
+        force: yes
+
+    - name: Donner les permissions à SonarQube
+      file:
+        path: "{{ sonarqube_install_dir }}/sonarqube-{{ sonarqube_version }}"
+        state: directory
+        recurse: yes
+        owner: "{{ sonarqube_user }}"
+        group: "{{ sonarqube_group }}"
+
+    - name: Créer un service systemd pour SonarQube
+      copy:
+        dest: /etc/systemd/system/{{ sonarqube_service_name }}.service
+        content: |
+          [Unit]
+          Description=SonarQube service
+          After=syslog.target network.target
+
+          [Service]
+          Type=forking
+          ExecStart={{ sonarqube_install_dir }}/current/bin/linux-x86-64/sonar.sh start
+          ExecStop={{ sonarqube_install_dir }}/current/bin/linux-x86-64/sonar.sh stop
+          User={{ sonarqube_user }}
+          Group={{ sonarqube_group }}
+          Restart=always
+          LimitNOFILE=65536
+          TimeoutStartSec=600
+          WorkingDirectory={{ sonarqube_install_dir }}/current
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+
+    - name: Créer dossier override systemd pour SonarQube si nécessaire
+      file:
+        path: /etc/systemd/system/sonarqube.service.d
+        state: directory
+        mode: '0755'
+
+    - name: Ajouter SONAR_SEARCH_JAVA_OPTS dans l'override systemd
+      copy:
+        dest: /etc/systemd/system/sonarqube.service.d/override.conf
+        content: |
+          [Service]
+          Environment="SONAR_SEARCH_JAVA_OPTS=-Dio.netty.noUnsafe=false"
+        mode: '0644'
+
+    - name: Recharger systemd
+      command: systemctl daemon-reload
+
+    - name: Activer et démarrer SonarQube
+      systemd:
+        name: "{{ sonarqube_service_name }}"
+        enabled: yes
+        state: started
+
+    - name: Attendre que SonarQube soit disponible via HTTP (démarrage lent possible)
+      uri:
+        url: "http://localhost:{{ sonarqube_port }}"
+        status_code: 200
+      register: sonarqube_response
+      until: sonarqube_response.status == 200
+      retries: 30
+      delay: 15
+
+    - name: Afficher les logs de SonarQube en cas d'échec
+      shell: tail -n 20 /opt/sonarqube/current/logs/sonar.log
+      when: sonarqube_response is failed
+      register: sonar_logs
+      ignore_errors: yes
+
+    - name: Debug des logs sonar.log
+      debug:
+        var: sonar_logs.stdout_lines
+      when: sonar_logs is defined
+
+    - name: Afficher l'URL SonarQube
+      debug:
+        msg: "SonarQube est disponible sur http://localhost:{{ sonarqube_port }}"

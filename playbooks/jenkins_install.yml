@@ -1,0 +1,143 @@
+---
+
+- name: Installer Jenkins sur Ubuntu (version 2.440.3 stable avec setup wizard)
+  hosts: cicdhub
+  become: yes
+
+  vars:
+    jenkins_version: "2.440.3"
+    jenkins_war_url: "https://get.jenkins.io/war-stable/{{ jenkins_version }}/jenkins.war"
+    jenkins_war_path: "/usr/share/java/jenkins.war"
+
+  tasks:
+    - name: Supprimer ancien fichier de dépôt Jenkins
+      file:
+        path: /etc/apt/sources.list.d/jenkins.list
+        state: absent
+
+    - name: Supprimer ancienne clé Jenkins
+      file:
+        path: /usr/share/keyrings/jenkins-keyring.gpg
+        state: absent
+
+    - name: Créer le dossier keyrings
+      file:
+        path: /usr/share/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Télécharger la clé GPG Jenkins (2023)
+      shell: |
+        curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | gpg --dearmor | tee /usr/share/keyrings/jenkins-keyring.gpg > /dev/null
+      args:
+        creates: /usr/share/keyrings/jenkins-keyring.gpg
+
+    - name: Ajouter le dépôt Jenkins
+      copy:
+        dest: /etc/apt/sources.list.d/jenkins.list
+        content: "deb [signed-by=/usr/share/keyrings/jenkins-keyring.gpg] https://pkg.jenkins.io/debian-stable binary/\n"
+        mode: '0644'
+
+    - name: Mettre à jour les paquets apt
+      apt:
+        update_cache: yes
+
+    - name: Installer Java (OpenJDK 17)
+      apt:
+        name: openjdk-17-jdk
+        state: present
+
+    - name: Installer Jenkins (base)
+      apt:
+        name: jenkins
+        state: present
+
+    - name: Supprimer jenkins.war par défaut
+      file:
+        path: "{{ jenkins_war_path }}"
+        state: absent
+
+    - name: Télécharger le WAR Jenkins {{ jenkins_version }}
+      get_url:
+        url: "{{ jenkins_war_url }}"
+        dest: "{{ jenkins_war_path }}"
+        mode: '0644'
+
+    - name: Définir les permissions sur jenkins.war
+      file:
+        path: "{{ jenkins_war_path }}"
+        owner: jenkins
+        group: jenkins
+        mode: '0644'
+
+    - name: Supprimer la config Jenkins existante (⚠️ attention si pas première install)
+      file:
+        path: /var/lib/jenkins
+        state: absent
+
+    - name: Recréer le répertoire Jenkins home vide
+      file:
+        path: /var/lib/jenkins
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: '0755'
+
+    - name: S'assurer que Jenkins écoute sur toutes les interfaces
+      lineinfile:
+        path: /etc/default/jenkins
+        regexp: '^HTTP_HOST='
+        line: 'HTTP_HOST=0.0.0.0'
+        create: yes
+
+    - name: Supprimer toute désactivation du setup wizard
+      lineinfile:
+        path: /etc/default/jenkins
+        regexp: '^JAVA_ARGS=.*runSetupWizard=false.*'
+        state: absent
+
+    - name: Ajouter des options Java personnalisées pour Jenkins
+      lineinfile:
+        path: /etc/default/jenkins
+        regexp: '^JAVA_ARGS='
+        line: 'JAVA_ARGS="-Djava.awt.headless=true -Xmx1024m"'
+        create: yes
+
+    - name: Créer dossier override systemd Jenkins si nécessaire
+      file:
+        path: /etc/systemd/system/jenkins.service.d
+        state: directory
+        mode: '0755'
+
+    - name: Étendre le timeout de démarrage Jenkins à 5 minutes
+      copy:
+        dest: /etc/systemd/system/jenkins.service.d/override.conf
+        content: |
+          [Service]
+          TimeoutStartSec=300
+        mode: '0644'
+
+    - name: Recharger configuration systemd
+      command: systemctl daemon-reload
+
+    - name: Redémarrer Jenkins
+      systemd:
+        name: jenkins
+        state: restarted
+        enabled: yes
+
+    - name: Attendre que Jenkins génère le mot de passe initial
+      wait_for:
+        path: /var/lib/jenkins/secrets/initialAdminPassword
+        state: present
+        timeout: 300
+
+    - name: Lire le mot de passe initial de Jenkins
+      command: cat /var/lib/jenkins/secrets/initialAdminPassword
+      register: jenkins_password
+      changed_when: false
+      failed_when: jenkins_password.rc != 0
+
+    - name: Afficher le mot de passe initial
+      debug:
+        msg: "Mot de passe initial Jenkins : {{ jenkins_password.stdout }}"

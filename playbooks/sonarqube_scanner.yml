@@ -1,0 +1,76 @@
+---
+- name: Installer et configurer SonarQube Scanner sur Ubuntu avec Java 17
+  hosts: cicdhub
+  become: true
+
+  vars:
+    sonar_scanner_version: "4.8.0.2856"
+    sonar_scanner_archive: "sonar-scanner-cli-{{ sonar_scanner_version }}-linux.zip"
+    sonar_scanner_download_url: "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/{{ sonar_scanner_archive }}"
+    sonar_scanner_base_dir: "/opt/sonar-scanner"
+    sonar_scanner_install_dir: "{{ sonar_scanner_base_dir }}/sonar-scanner-{{ sonar_scanner_version }}-linux"
+    sonar_scanner_symlink: "/usr/local/bin/sonar-scanner"
+
+  tasks:
+
+    - name: Mettre à jour les paquets
+      apt:
+        update_cache: yes
+        upgrade: no
+
+    - name: Installer Java 17 (si nécessaire)
+      apt:
+        name: openjdk-17-jdk
+        state: present
+
+    - name: Installer unzip
+      apt:
+        name: unzip
+        state: present
+
+    - name: Créer le dossier Sonar Scanner (si non existant)
+      file:
+        path: "{{ sonar_scanner_base_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Télécharger SonarQube Scanner
+      get_url:
+        url: "{{ sonar_scanner_download_url }}"
+        dest: "/tmp/{{ sonar_scanner_archive }}"
+        mode: '0644'
+
+    - name: Extraire SonarQube Scanner dans /opt
+      unarchive:
+        src: "/tmp/{{ sonar_scanner_archive }}"
+        dest: "{{ sonar_scanner_base_dir }}"
+        remote_src: yes
+        creates: "{{ sonar_scanner_install_dir }}"
+
+    - name: Créer un lien symbolique global
+      file:
+        src: "{{ sonar_scanner_install_dir }}/bin/sonar-scanner"
+        dest: "{{ sonar_scanner_symlink }}"
+        state: link
+        force: yes
+
+    - name: Configurer SonarQube Scanner dans l'environnement système
+      copy:
+        dest: /etc/profile.d/sonar-scanner.sh
+        content: |
+          export PATH=$PATH:{{ sonar_scanner_install_dir }}/bin
+        mode: '0644'
+
+    - name: Rendre le fichier de profil exécutable
+      file:
+        path: /etc/profile.d/sonar-scanner.sh
+        mode: '0755'
+
+    - name: Vérifier la version de SonarQube Scanner
+      command: "{{ sonar_scanner_symlink }} --version"
+      register: sonar_version_check
+      changed_when: false
+
+    - name: Afficher la version de SonarQube Scanner
+      debug:
+        msg: "Version installée : {{ sonar_version_check.stdout }}"
