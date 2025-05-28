@@ -1,0 +1,8 @@
+---
+- name: Include master tasks
+  include_tasks: master.yml
+  when: k3s_role is not defined or k3s_role != 'worker'
+
+- name: Include worker tasks
+  include_tasks: worker.yml
+  when: k3s_role is defined and k3s_role == 'worker'

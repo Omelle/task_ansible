@@ -1,0 +1,52 @@
+---
+- name: Install K3s Master on cicdhub
+  hosts: cicdhub
+  become: yes
+  roles:
+    - k3s
+  tasks:
+    - name: Slurp the K3s token
+      slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: slurped_token
+
+    - name: Set K3s token fact for later use
+      set_fact:
+        k3s_token: "{{ slurped_token.content | b64decode | trim }}"
+      delegate_to: localhost
+
+    - name: Set master IP fact for worker setup
+      set_fact:
+        k3s_server_url: "https://{{ ansible_host }}:6443"
+      delegate_to: localhost
+
+- name: Install K3s Worker on monitoring
+  hosts: monitoring
+  become: yes
+  roles:
+    - k3s
+  vars:
+    k3s_role: worker
+    k3s_token: "{{ hostvars['localhost']['k3s_token'] }}"
+    k3s_server_url: "{{ hostvars['localhost']['k3s_server_url'] }}"
+
+- name: Install Helm & kubectl
+  hosts: cicdhub
+  become: yes
+  roles:
+    - helm
+    - kubectl
+
+- name: Setup MetalLB, MariaDB, phpMyAdmin
+  hosts: cicdhub
+  become: yes
+  roles:
+    - metallb
+    - mariadb
+    - phpmyadmin
+
+- name: Setup Grafana + Prometheus
+  hosts: monitoring
+  become: yes
+  roles:
+    - monitoring

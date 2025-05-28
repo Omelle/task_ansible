@@ -1,0 +1,31 @@
+- name: Add MetalLB Helm repo
+  shell: helm repo add metallb https://metallb.github.io/metallb
+
+- name: Update repos
+  shell: helm repo update
+
+- name: Install MetalLB
+  shell: helm install metallb metallb/metallb --namespace metallb-system --create-namespace
+
+- name: Apply MetalLB config
+  copy:
+    dest: /tmp/metallb-config.yaml
+    content: |
+      apiVersion: metallb.io/v1beta1
+      kind: IPAddressPool
+      metadata:
+        name: ip-pool
+        namespace: metallb-system
+      spec:
+        addresses:
+        - 192.168.33.200-192.168.33.210
+
+      ---
+      apiVersion: metallb.io/v1beta1
+      kind: L2Advertisement
+      metadata:
+        name: l2adv
+        namespace: metallb-system
+
+- name: Apply config
+  shell: kubectl apply -f /tmp/metallb-config.yaml

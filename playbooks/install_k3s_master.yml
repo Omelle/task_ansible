@@ -1,0 +1,10 @@
+# Fichier temporaire playbooks/install_k3s_master.yml
+- name: Install K3s Master
+  hosts: cicdhub
+  become: yes
+  tasks:
+    - name: Install K3s master
+      shell: curl -sfL https://get.k3s.io | sh -
+      args:
+        creates: /usr/local/bin/k3s
+

@@ -1,0 +1,37 @@
+---
+- name: Clean old K3s installation
+  hosts: cicdhub,monitoring
+  become: yes
+
+  tasks:
+    - name: Stop K3s service if exists
+      systemd:
+        name: k3s
+        state: stopped
+      ignore_errors: yes
+
+    - name: Remove K3s binary
+      file:
+        path: /usr/local/bin/k3s
+        state: absent
+
+    - name: Remove K3s data directories
+      file:
+        path: "{{ item }}"
+        state: absent
+        recurse: yes
+      loop:
+        - /etc/rancher/k3s
+        - /var/lib/rancher/k3s
+        - /var/lib/kubelet
+        - /var/lib/cni
+        - /var/lib/etcd
+        - /var/run/k3s
+
+    - name: Remove K3s service file
+      file:
+        path: /etc/systemd/system/k3s.service
+        state: absent
+
+    - name: Reload systemd daemon
+      command: systemctl daemon-reload

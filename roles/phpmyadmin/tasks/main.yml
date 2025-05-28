@@ -1,0 +1,9 @@
+- name: Deploy phpMyAdmin
+  shell: |
+    helm install phpmyadmin bitnami/phpmyadmin \
+      --namespace phpmyadmin --create-namespace \
+      --set service.type=LoadBalancer \
+      --set db.host=mariadb.mariadb.svc.cluster.local \
+      --set db.port=3306 \
+      --set db.username=root \
+      --set db.password=myrootpassword

@@ -1,0 +1,1 @@
+k3s_role: "{{ 'master' if inventory_hostname in groups['cicdhub'] else 'worker' }}"

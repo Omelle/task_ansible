@@ -1,0 +1,13 @@
+- name: Add Bitnami repo
+  shell: helm repo add bitnami https://charts.bitnami.com/bitnami
+
+- name: Update
+  shell: helm repo update
+
+- name: Deploy MariaDB Galera
+  shell: |
+    helm install mariadb bitnami/mariadb-galera \
+      --namespace mariadb --create-namespace \
+      --set rootUser.password=myrootpassword \
+      --set db.name=myappdb
+

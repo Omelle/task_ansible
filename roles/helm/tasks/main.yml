@@ -1,0 +1,15 @@
+- name: Download Helm install script
+  get_url:
+    url: https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3
+    dest: /tmp/get_helm.sh
+    mode: '0755'
+
+- name: Run Helm install script
+  shell: /tmp/get_helm.sh
+
+- name: Ensure helm is in PATH
+  shell: |
+    echo 'export PATH=/usr/local/bin:$PATH' >> ~/.bashrc
+    export PATH=/usr/local/bin:$PATH
+  args:
+    executable: /bin/bash

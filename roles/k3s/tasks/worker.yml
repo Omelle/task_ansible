@@ -1,0 +1,21 @@
+---
+- name: Ensure K3s token and server URL are defined
+  fail:
+    msg: "k3s_token and k3s_server_url must be set to join the cluster as a worker."
+  when: k3s_token is not defined or k3s_server_url is not defined
+
+- name: Download and install K3s worker
+  shell: |
+    curl -sfL https://get.k3s.io | K3S_URL={{ k3s_server_url }} K3S_TOKEN={{ k3s_token }} sh -
+  args:
+    creates: /usr/local/bin/k3s
+
+- name: Wait for K3s service to be active
+  systemd:
+    name: k3s-agent
+    state: started
+    enabled: yes
+  retries: 5
+  delay: 5
+  register: result
+  until: result.status.ActiveState == "active"

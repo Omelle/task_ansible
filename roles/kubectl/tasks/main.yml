@@ -1,0 +1,25 @@
+- name: Check if k3s binary exists
+  stat:
+    path: /usr/local/bin/k3s
+  register: k3s_binary
+
+- name: Fail if k3s is not installed
+  fail:
+    msg: "K3s is not installed or /usr/local/bin/k3s is missing. Run the k3s master role first."
+  when: not k3s_binary.stat.exists
+
+- name: Create symlink for kubectl from k3s
+  file:
+    src: /usr/local/bin/k3s
+    dest: /usr/local/bin/kubectl
+    state: link
+  when: k3s_binary.stat.exists
+
+- name: Export KUBECONFIG for current user
+  lineinfile:
+    path: /root/.bashrc
+    line: 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml'
+    create: yes
+
+- name: Export KUBECONFIG for current session
+  shell: export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
