@@ -1,0 +1,114 @@
+---
+- name: Clean existing K3s install
+  hosts: all
+  become: true
+  tasks:
+    - name: Stop K3s services
+      service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: no
+      loop:
+        - k3s
+        - k3s-agent
+      ignore_errors: true
+
+    - name: Remove K3s binaries and config
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/bin/k3s
+        - /etc/systemd/system/k3s.service
+        - /etc/systemd/system/k3s-agent.service
+        - /var/lib/rancher
+        - /etc/rancher
+        - /var/lib/kubelet
+        - /etc/cni
+        - /opt/cni
+        - /var/lib/cni
+        - /etc/kubernetes
+      ignore_errors: true
+
+- name: Install K3s master
+  hosts: monitoring
+  become: true
+  tasks:
+    - name: Install K3s server (master)
+      shell: |
+        curl -sfL https://get.k3s.io | sh -s - server --disable traefik
+      args:
+        warn: false
+      register: install_k3s
+      failed_when: install_k3s.rc != 0
+
+    - name: Wait for k3s service to be active
+      systemd:
+        name: k3s
+        state: started
+        enabled: yes
+
+    - name: Wait for Kubernetes to be ready
+      shell: kubectl get nodes
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: result
+      until: result.rc == 0
+      retries: 15
+      delay: 5
+      changed_when: false
+
+- name: Install K3s agent on worker nodes
+  hosts: cicdhub
+  become: true
+  tasks:
+    - name: Get K3s token from master
+      delegate_to: monitoring
+      become: true
+      slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: k3s_token
+
+    - name: Set decoded token
+      set_fact:
+        k3s_token_decoded: "{{ k3s_token.content | b64decode | trim }}"
+
+    - name: Get master IP
+      delegate_to: monitoring
+      command: hostname -I
+      register: master_ip
+
+    - name: Set master IP
+      set_fact:
+        master_ip_addr: "{{ master_ip.stdout.split()[0] }}"
+
+    - name: Install K3s agent (worker)
+      shell: |
+        curl -sfL https://get.k3s.io | K3S_URL="https://{{ master_ip_addr }}:6443" K3S_TOKEN="{{ k3s_token_decoded }}" sh -
+      args:
+        warn: false
+      register: install_k3s_agent
+      failed_when: install_k3s_agent.rc != 0
+
+    - name: Wait for agent to be active
+      shell: systemctl is-active k3s-agent
+      register: agent_status
+      until: agent_status.stdout == "active"
+      retries: 10
+      delay: 5
+      changed_when: false
+
+- name: Verify cluster state
+  hosts: monitoring
+  become: true
+  tasks:
+    - name: Get cluster nodes
+      shell: kubectl get nodes -o wide
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: node_info
+      failed_when: node_info.rc != 0
+
+    - name: Show cluster nodes
+      debug:
+        var: node_info.stdout_lines

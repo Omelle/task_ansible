@@ -1,0 +1,170 @@
+---
+- name: Clean existing K3s install
+  hosts: all
+  become: yes
+  tasks:
+    - name: Stop K3s services
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: no
+      loop:
+        - k3s
+        - k3s-agent
+      ignore_errors: yes
+
+    - name: Remove K3s binaries and config
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/bin/k3s
+        - /etc/systemd/system/k3s.service
+        - /etc/systemd/system/k3s-agent.service
+        - /var/lib/rancher
+        - /etc/rancher
+        - /var/lib/kubelet
+        - /etc/cni
+        - /opt/cni
+        - /var/lib/cni
+        - /etc/kubernetes
+      ignore_errors: yes
+
+- name: Install K3s master
+  hosts: monitoring
+  become: yes
+  tasks:
+    - name: Install K3s (master) with proper options
+      shell: |
+        curl -sfL https://get.k3s.io | \
+          INSTALL_K3S_EXEC="--write-kubeconfig-mode 644 --disable traefik" \
+          sh -
+      args:
+        creates: /usr/local/bin/k3s
+
+    - name: Wait for k3s service to be active
+      systemd:
+        name: k3s
+        state: started
+        enabled: yes
+
+    - name: Wait for Kubernetes API
+      uri:
+        url: https://127.0.0.1:6443/healthz
+        method: GET
+        validate_certs: no
+      register: result
+      until: result.status == 200
+      retries: 15
+      delay: 5
+
+    - name: Wait until all core pods are running
+      shell: |
+        kubectl wait --for=condition=Ready pods --all --all-namespaces --timeout=120s
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: waitpods
+      changed_when: false
+
+    - name: Slurp K3s token
+      slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: slurped_token
+
+    - name: Set token & URL facts
+      set_fact:
+        k3s_token: "{{ slurped_token.content | b64decode | trim }}"
+        k3s_server_url: "https://{{ ansible_host }}:6443"
+
+- name: Propagate facts to localhost
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Set connection vars
+      set_fact:
+        k3s_token: "{{ hostvars['monitoring']['k3s_token'] }}"
+        k3s_server_url: "{{ hostvars['monitoring']['k3s_server_url'] }}"
+
+- name: Install K3s worker
+  hosts: cicdhub
+  become: yes
+  tasks:
+    - name: Install K3s worker
+      shell: |
+        curl -sfL https://get.k3s.io | \
+          K3S_URL="{{ hostvars['localhost']['k3s_server_url'] }}" \
+          K3S_TOKEN="{{ hostvars['localhost']['k3s_token'] }}" \
+          sh -
+      args:
+        creates: /usr/local/bin/k3s
+
+    - name: Enable and start k3s-agent
+      systemd:
+        name: k3s-agent
+        state: started
+        enabled: yes
+
+- name: Deploy Helm, MetalLB, MariaDB, phpMyAdmin
+  hosts: monitoring
+  become: yes
+  tasks:
+    - name: Install Helm
+      shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      args:
+        creates: /usr/local/bin/helm
+
+    - name: Add Helm repos
+      shell: |
+        helm repo add metallb https://metallb.github.io/metallb
+        helm repo add bitnami https://charts.bitnami.com/bitnami
+        helm repo update
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Install MetalLB
+      shell: helm install metallb metallb/metallb --namespace metallb-system --create-namespace
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Install MariaDB
+      shell: |
+        helm install mariadb bitnami/mariadb \
+          --namespace mariadb --create-namespace \
+          --set auth.rootPassword=rootpassword \
+          --set auth.database=my_database
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Install phpMyAdmin
+      shell: |
+        helm install phpmyadmin bitnami/phpmyadmin \
+          --namespace phpmyadmin --create-namespace \
+          --set db.host=mariadb.mariadb.svc.cluster.local \
+          --set db.port=3306 \
+          --set db.user=root \
+          --set db.password=rootpassword
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Create LoadBalancer for phpMyAdmin
+      copy:
+        dest: /tmp/phpmyadmin-lb.yaml
+        content: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: phpmyadmin-lb
+            namespace: phpmyadmin
+          spec:
+            type: LoadBalancer
+            selector:
+              app.kubernetes.io/name: phpmyadmin
+            ports:
+              - port: 80
+                targetPort: http
+
+    - name: Apply phpMyAdmin LoadBalancer
+      shell: kubectl apply -f /tmp/phpmyadmin-lb.yaml
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
